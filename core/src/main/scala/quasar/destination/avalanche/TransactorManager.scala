@@ -69,6 +69,8 @@ object TransactorManager {
 
     val AvalancheAuth.ExternalAuth(authId, userinfoUri, userinfoField) = auth
 
+    def inner: F[] = ???
+
     for {
       expiringToken <- Resource.eval(acquireValidToken[F](token))
       client <- Http4sEmberClient.client[F]
@@ -79,6 +81,19 @@ object TransactorManager {
       ref <- Resource.eval(Ref[F].of(firstTransactor))
       hotswap <- Hotswap.create[F, Transactor[F]]
     } yield {
+
+      expiringToken.flatMap(_.isExpired).flatMap { isExpired =>
+        if (isExpired)
+          acquireValidToken(token).flatMap { expiringToken => 
+
+
+          }
+
+
+        else
+          ref.get
+
+      }
 
     }
 
