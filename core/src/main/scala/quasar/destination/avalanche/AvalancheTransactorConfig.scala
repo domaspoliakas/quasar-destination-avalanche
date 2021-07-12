@@ -86,14 +86,15 @@ case class AvalancheTransactorConfig(
         AvalancheTransactorConfig.fromUsernamePassword(connectionUri, username, password).asRight[String].pure[F]
 
       case ExternalAuth(authId, userinfoUri, userinfoField) =>
-        (
-          for {
-            token <- EitherT(getToken[F](getAuth, authId))
-            email <- EitherT.fromOptionF(
-              UserInfoGetter.emailFromUserinfo(token, userinfoUri, userinfoField),
-              "Querying user info using the token acquired via the auth key did not yield an email. Check the scopes granted to the token.")
-          } yield AvalancheTransactorConfig.fromToken(connectionUri, Username(email.asString), token)
-        ).value
+        scala.Predef.???
+        // (
+        //   for {
+        //     token <- EitherT(getToken[F](getAuth, authId))
+        //     email <- EitherT.fromOptionF(
+        //       UserInfoGetter.emailFromUserinfo(token, userinfoUri, userinfoField),
+        //       "Querying user info using the token acquired via the auth key did not yield an email. Check the scopes granted to the token.")
+        //   } yield AvalancheTransactorConfig.fromToken(connectionUri, Username(email.asString), token)
+        // ).value
 
     }
   }
