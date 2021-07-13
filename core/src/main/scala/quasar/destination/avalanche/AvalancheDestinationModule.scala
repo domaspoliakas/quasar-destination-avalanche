@@ -35,6 +35,8 @@ import quasar.api.destination.{DestinationError => DE}
 import quasar.connector.{GetAuth, MonadResourceErr}
 import quasar.connector.destination._
 import quasar.lib.jdbc.{ManagedTransactor, Redacted}
+import quasar.destination.avalanche.AvalancheAuth.UsernamePassword
+import quasar.destination.avalanche.AvalancheAuth.ExternalAuth
 
 
 abstract class AvalancheDestinationModule[C: DecodeJson] extends DestinationModule {
@@ -45,7 +47,7 @@ abstract class AvalancheDestinationModule[C: DecodeJson] extends DestinationModu
 
   def avalancheDestination[F[_]: ConcurrentEffect: ContextShift: MonadResourceErr: Timer](
       config: C,
-      transactor: Transactor[F],
+      transactor: F[Transactor[F]],
       pushPull: PushmiPullyu[F],
       log: Logger)
       : Resource[F, Either[InitError, Destination[F]]]
@@ -77,28 +79,55 @@ abstract class AvalancheDestinationModule[C: DecodeJson] extends DestinationModu
     val init = for {
       cfg <- EitherT.fromEither[Resource[F, ?]](cfg0)
 
-      xaCfg <- EitherT(
-        Resource.eval(
-          connectionConfig(cfg)
-            .transactorConfig(auth)
-            .map(_.leftMap(s => 
-             DE.InvalidConfiguration(destinationType, sanitizedJson, scalaz.NonEmptyList(s))))))
-
       tag <- liftF(Sync[F].delay(Random.alphanumeric.take(6).mkString))
-
       debugId = s"destination.$id.$tag"
 
-      xa <- EitherT {
-        ManagedTransactor[F](debugId, xaCfg)
-          .attemptNarrow[Exception]
-          .map(_.leftMap(DE.connectionFailed[Json, InitError](
-            destinationType,
-            sanitizedJson, _)))
-      }
+      connConf = connectionConfig(cfg)
+
+      acquireTransactor <- ((connConf.auth match {
+        case UsernamePassword(username, password) =>
+          for {
+            xaCfg <- EitherT.pure[Resource[F, ?], InitError](
+                AvalancheTransactorConfig.fromUsernamePassword(
+                  connConf.connectionUri, 
+                  username, 
+                  password))
+
+            xa <- EitherT(
+              ManagedTransactor[F](debugId, xaCfg)
+                .attemptNarrow[Exception]
+                .map(_.leftMap(DE.connectionFailed[Json, InitError](
+                  destinationType,
+                  sanitizedJson, _))))
+          } yield xa.pure[F]
+
+        case ext: ExternalAuth =>
+
+          EitherT(TransactorManager(
+            ext,
+            auth,
+            (email, token) => {
+              val conf = AvalancheTransactorConfig.fromToken(
+                connConf.connectionUri, 
+                Username(email.asString), 
+                token)
+
+              ManagedTransactor[F](debugId, conf)
+            })
+              .attemptNarrow[TransactorManager.Error]).leftMap {
+              case TransactorManager.Error(message) => 
+                DE.invalidConfiguration[Json, InitError](
+                  destinationType, 
+                  sanitizedJson, 
+                  scalaz.NonEmptyList(message))
+            }
+
+
+      }): EitherT[Resource[F, ?], InitError, F[Transactor[F]]])
 
       slog <- liftF(Sync[F].delay(LoggerFactory(s"quasar.plugin.$debugId")))
 
-      dest <- EitherT(avalancheDestination(cfg, xa, pushPull, slog))
+      dest <- EitherT(avalancheDestination(cfg, acquireTransactor, pushPull, slog))
 
       _ <- liftF(Sync[F].delay(slog.info(s"Initialized $debugId: ${sanitizeDestinationConfig(config)}")))
     } yield dest
